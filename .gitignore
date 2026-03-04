@@ -1,0 +1,12 @@
+/target
+**/*.rs.bk
+.DS_Store
+
+# Daemon runtime files
+/var/run/listent/
+/etc/listent/
+*.pid
+*.sock
+
+# LaunchD plists (in development)
+*.plist.dev
