@@ -346,22 +346,21 @@ fn install_daemon_service(config_path: Option<std::path::PathBuf>) -> Result<()>
     // Validate configuration
     daemon_config.validate()?;
 
-    // Save configuration to standard location if not provided
-    let final_config_path = if let Some(config_file) = config_path {
-        config_file
-    } else {
-        let config_path = DaemonConfiguration::user_config_path()?;
-        if let Some(parent) = config_path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        daemon_config.save_to_file(&config_path)?;
-        println!("📝 Saved configuration to: {}", config_path.display());
-        config_path
-    };
-
-    // Get current executable path
+    // The root service must not execute a binary replaceable by an ordinary user.
     let current_exe = std::env::current_exe()
         .context("Could not determine current executable path")?;
+    let current_exe = daemon::permissions::protected_path(&current_exe, false)
+        .context("Install listent in a root-owned directory before installing the system service")?;
+
+    // Import a snapshot; launchd must not keep using a caller-writable config.
+    let config_content = toml::to_string_pretty(&daemon_config)
+        .context("Failed to serialize configuration")?;
+    let final_config_path = daemon::permissions::write_protected_file(
+        &DaemonConfiguration::default_config_path()?,
+        config_content.as_bytes(),
+        0o600,
+    )?;
+    println!("📝 Saved configuration to: {}", final_config_path.display());
 
     // Create LaunchD plist and install service
     let plist = LaunchDPlist::new(&current_exe);
