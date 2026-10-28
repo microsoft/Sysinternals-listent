@@ -5,6 +5,7 @@
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use super::permissions;
 use crate::constants::{LAUNCHD_SERVICE_NAME, LAUNCHD_PLIST_NAME, LAUNCHD_DAEMONS_DIR, DAEMON_SUBCOMMAND, DAEMON_RUN_SUBCOMMAND, DAEMON_WORKING_DIR, DAEMON_LOG_FILE, DAEMON_SYSTEM_PATH};
 
 /// Escape special XML characters to prevent injection in plist content
@@ -148,11 +149,7 @@ impl LaunchDPlist {
         let plist_path = Path::new(LAUNCHD_DAEMONS_DIR)
             .join(LAUNCHD_PLIST_NAME);
 
-        // Write plist file
-        std::fs::write(&plist_path, plist_content)
-            .with_context(|| format!("Failed to write plist file: {}", plist_path.display()))?;
-
-        Ok(plist_path)
+        permissions::write_protected_file(&plist_path, plist_content.as_bytes(), 0o644)
     }
 
     /// Load service with launchctl using modern bootstrap API
@@ -162,7 +159,7 @@ impl LaunchDPlist {
             .context("Plist path contains invalid UTF-8")?;
 
         // Try modern bootstrap API first (macOS 10.10+)
-        let output = Command::new("launchctl")
+        let output = Command::new("/bin/launchctl")
             .args(["bootstrap", "system", path_str])
             .output()
             .context("Failed to execute launchctl bootstrap")?;
@@ -172,7 +169,7 @@ impl LaunchDPlist {
         }
 
         // Fall back to legacy load command for older macOS versions
-        let legacy_output = Command::new("launchctl")
+        let legacy_output = Command::new("/bin/launchctl")
             .args(["load", path_str])
             .output()
             .context("Failed to execute launchctl load")?;
@@ -234,24 +231,26 @@ impl LaunchDPlist {
 
     /// Install daemon service to LaunchD
     pub fn install_service(&self, daemon_path: &Path, config_path: Option<&Path>) -> Result<()> {
-        // Create necessary directories
-        if let Some(ref working_dir) = self.working_directory {
-            std::fs::create_dir_all(working_dir)
-                .with_context(|| format!("Failed to create working directory: {}", working_dir.display()))?;
-        }
-
-        if let Some(ref log_path) = self.standard_out_path {
-            if let Some(log_dir) = log_path.parent() {
-                std::fs::create_dir_all(log_dir)
-                    .with_context(|| format!("Failed to create log directory: {}", log_dir.display()))?;
-            }
-        }
-
-        // Generate plist content
+        let daemon_path = permissions::protected_path(daemon_path, false)?;
         let mut plist = self.clone();
+        plist.program_arguments = vec![
+            daemon_path.to_string_lossy().to_string(),
+            DAEMON_SUBCOMMAND.to_string(),
+            DAEMON_RUN_SUBCOMMAND.to_string(),
+        ];
+        if let Some(ref working_dir) = self.working_directory {
+            plist.working_directory = Some(permissions::protected_directory(working_dir)?);
+        }
+        if let Some(ref log_path) = self.standard_out_path {
+            plist.standard_out_path = Some(permissions::protected_log(log_path)?);
+        }
+        if let Some(ref log_path) = self.standard_error_path {
+            plist.standard_error_path = Some(permissions::protected_log(log_path)?);
+        }
 
         // Update program arguments with config path if provided
         if let Some(config) = config_path {
+            let config = permissions::protected_path(config, false)?;
             plist.program_arguments = vec![
                 daemon_path.to_string_lossy().to_string(),
                 DAEMON_SUBCOMMAND.to_string(),

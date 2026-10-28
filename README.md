@@ -94,10 +94,14 @@ log show --predicate 'subsystem == "com.microsoft.sysinternals.listent" AND mess
 ```
 
 ### 4. Background Daemon Service
-Run monitoring as a persistent system service managed by launchd:
+Run monitoring as a persistent root system service managed by launchd. First copy
+the trusted binary out of your build/Homebrew directory into a root-owned location:
 ```bash
+sudo install -d -o root -g wheel -m 0755 /Library/Listent
+sudo install -o root -g wheel -m 0755 "$(command -v listent)" /Library/Listent/listent
+
 # Install and start daemon
-sudo listent daemon install
+sudo /Library/Listent/listent daemon install
 
 # Check daemon status
 listent daemon status
@@ -116,6 +120,17 @@ listent daemon stop
 # Uninstall service
 sudo listent daemon uninstall
 ```
+
+The executable and all directories in its resolved path must be root-owned and
+not writable by group/other users. The installer also rejects ACL allow entries
+(even read-only grants); standard deny-only ACLs are accepted. A root-owned binary
+inside a user-writable directory is **not** safe. Do not recursively change
+permissions on your home or Homebrew tree to satisfy these checks.
+
+After upgrading listent, uninstall the service, replace this protected binary
+with the trusted new version, and install again using the desired configuration.
+Uninstall removes the service definition, not the protected binary/configuration.
+Standalone `listent daemon run --config FILE` is unchanged.
 
 ## Examples
 
@@ -143,16 +158,16 @@ listent monitor --interval 2.0
 listent monitor -e "com.apple.security.*"
 
 # Run as daemon with custom config
-listent daemon run --config /etc/listent/daemon.toml
+listent daemon run --config ./daemon.toml
 ```
 
 ### Daemon Management
 ```bash
 # Install daemon with default monitoring (requires sudo)
-sudo listent daemon install
+sudo /Library/Listent/listent daemon install
 
-# Install with custom configuration file
-sudo listent daemon install --config /path/to/config.toml
+# Import a custom configuration into the protected system configuration
+sudo /Library/Listent/listent daemon install --config /path/to/config.toml
 
 # View recent daemon activity
 listent daemon logs --since 1h
@@ -194,18 +209,29 @@ sudo listent daemon uninstall
 
 ### Daemon Configuration
 Daemon settings are configured via a TOML configuration file:
-- **Default location**: `~/.config/listent/daemon.toml`
-- **Custom path**: Use `--config` with `daemon install`
+- **Installed service configuration**: `/etc/listent/daemon.toml`, root-owned mode
+  `0600`. The plist is root-owned mode `0644`; installed paths are canonicalized
+  (for example, `/etc` is recorded as `/private/etc` on macOS).
+- **Custom input**: `daemon install --config FILE` validates and imports a snapshot.
+  Editing the original input afterward does not affect the root service. An install
+  without `--config` writes defaults.
+- **Existing installations**: Uninstall and reinstall with a protected executable.
+  To retain an old home-directory configuration, pass it explicitly with `--config`.
 
-To change configuration, edit the config file and restart the daemon:
+To change an installed configuration and reinstall without resetting it:
 ```bash
 # Edit config
-nano ~/.config/listent/daemon.toml
+sudo nano /etc/listent/daemon.toml
 
-# Restart daemon
-listent daemon stop
-sudo listent daemon install
+# Reload service with the edited configuration
+sudo /Library/Listent/listent daemon uninstall
+sudo /Library/Listent/listent daemon install --config /etc/listent/daemon.toml
 ```
+
+The installer rejects untrusted existing configuration, working, log, or service
+directories instead of silently changing their ownership. Inspect any reported
+path before an administrator repairs it. Config/plist replacement is atomic and
+does not follow existing destination links; existing log links are rejected.
 
 Example daemon configuration:
 ```toml

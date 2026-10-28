@@ -8,6 +8,7 @@
 pub mod config;
 pub mod launchd;
 pub mod logging;
+pub mod permissions;
 
 use anyhow::{Context, Result, bail};
 use std::io::BufRead;
